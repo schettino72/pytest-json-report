@@ -118,6 +118,7 @@ class JSONReport(JSONReportBase):
         JSONReportBase.__init__(self, *args, **kwargs)
         self._start_time = None
         self._json_tests = OrderedDict()
+        self._json_deselected = 0 # count
         self._json_collectors = []
         self._json_warnings = []
         self._terminal_summary = ''
@@ -140,13 +141,11 @@ class JSONReport(JSONReportBase):
                                                               json_result))
 
     def pytest_deselected(self, items):
-        if self._must_omit('collectors'):
-            return
         for item in items:
-            try:
+            # bug-69 --last-failed causes test not collected to be explicitly deselected
+            if hasattr(item, '_json_collectitem'):
                 item._json_collectitem['deselected'] = True
-            except AttributeError:
-                continue
+                self._json_deselected += 1
 
     @pytest.hookimpl(hookwrapper=True)
     def pytest_collection_modifyitems(self, items):
@@ -203,14 +202,19 @@ class JSONReport(JSONReportBase):
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_sessionfinish(self, session):
+        summary_data = {
+            'collected': session.testscollected + self._json_deselected
+        }
+        if self._json_deselected:
+            summary_data['deselected'] = self._json_deselected
+
         json_report = serialize.make_report(
             created=time.time(),
             duration=time.time() - self._start_time,
             exitcode=session.exitstatus,
             root=str(session.fspath),
             environment=getattr(self._config, '_metadata', {}),
-            summary=serialize.make_summary(self._json_tests,
-                                           collected=session.testscollected),
+            summary=serialize.make_summary(self._json_tests, **summary_data),
         )
         if not self._config.option.json_report_summary:
             if self._json_collectors:
